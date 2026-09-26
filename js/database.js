@@ -5,7 +5,7 @@
  */
 
 const DB_NAME = 'melkyar_db';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 const REMOTE = typeof window !== 'undefined' && !window.MELKYAR_APP && /^https?:$/.test(window.location.protocol);
 
 const STORES = {
@@ -26,6 +26,7 @@ const STORES = {
   tasks: { keyPath: 'id', autoIncrement: true, indexes: ['dueDate','status'] },
   notifications: { keyPath: 'id', autoIncrement: true, indexes: ['read','date'] },
   messages: { keyPath: 'id', autoIncrement: true, indexes: ['customerId','date'] },
+  userRequests: { keyPath: 'id', autoIncrement: true, indexes: ['status','requestedAt','username'] },
 };
 
 let _dbPromise = null;
@@ -155,6 +156,7 @@ const usersRepo = createRepository('users');
 const tasksRepo = createRepository('tasks');
 const notificationsRepo = createRepository('notifications');
 const messagesRepo = createRepository('messages');
+const userRequestsRepo = createRepository('userRequests');
 
 async function logActivity({ entityType, entityId, action, field = null, oldValue = null, newValue = null }) {
   const actor = (window.AUTH && window.AUTH.currentUser && window.AUTH.currentUser()) || null;
@@ -181,6 +183,6 @@ window.db = {
   properties: propertiesRepo, customers: customersRepo, activities: activitiesRepo, settings: settingsRepo,
   owners: ownersRepo, visits: visitsRepo, followups: followupsRepo, deals: dealsRepo, commissions: commissionsRepo,
   transactions: transactionsRepo, accounts: accountsRepo, loans: loansRepo, builders: buildersRepo, users: usersRepo,
-  tasks: tasksRepo, notifications: notificationsRepo, messages: messagesRepo,
+  tasks: tasksRepo, notifications: notificationsRepo, messages: messagesRepo, userRequests: userRequestsRepo,
   updatePropertyWithHistory, logActivity, isDatabaseEmpty,
 };
