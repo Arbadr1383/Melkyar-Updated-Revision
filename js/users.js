@@ -24,7 +24,9 @@ const usersModule = {
   async renderUsers(el, embedded=false) {
     ui.renderLoading(el, 'در حال بارگذاری کاربران و دسترسی‌ها...');
     try {
-      const [us, customers] = await Promise.all([db.users.getAll(), db.customers.getAll()]);
+      const [allUsers, customers, requests] = await Promise.all([db.users.getAll(), db.customers.getAll(), db.userRequests.getAll()]);
+      const isOwner = !!(AUTH.currentUser()?.developer || AUTH.currentUser()?.username?.toLowerCase() === 'alireza');
+      const us = isOwner ? allUsers : allUsers.filter(u => !u.developer && !u.builtin);
       const freeLimit = Number((await db.settings.get('freeUserLimit'))?.value || 3);
       const customerMap = new Map(customers.map(c => [Number(c.id), c]));
       const rows = us.map(u => {
@@ -40,9 +42,15 @@ const usersModule = {
           ${!u.builtin && String(u.username).toLowerCase() !== 'ali' ? `<button class="btn btn--danger btn--sm" data-del="${u.id}">حذف</button>` : '<span class="hint">مدیر اصلی</span>'}</td>
         </tr>`;
       });
-      el.innerHTML = (embedded ? '<div class="users-embedded">' : '') + mk.page('کاربران و دسترسی‌ها','ساخت کاربر، اتصال به مشتری و کنترل دقیق دسترسی‌ها','<button class="btn btn--primary" id="add">+ ایجاد کاربر</button>')
-        + mk.table(['نام','نام کاربری','مشتری مرتبط','نقش','وضعیت','دسترسی','عملیات'], rows, 'هنوز کاربری ثبت نشده است.') + (embedded ? '</div>' : '');
-      el.querySelector('#add').onclick = () => this.openUserForm(el, null);
+      const action = isOwner ? '<button class="btn btn--primary" id="add">+ ایجاد کاربر</button>' : '<button class="btn btn--primary" id="request-add">+ درخواست کاربر جدید</button>';
+      const reqRows = isOwner ? requests.filter(r=>r.status==='pending').map(r=>`<tr><td>${mk.esc(r.name)}</td><td>${mk.esc(r.username)}</td><td>${mk.esc(r.roleLabel||r.role||'مشاور')}</td><td>${mk.esc(r.requestedByName||'—')}</td><td>${new Date(r.requestedAt||Date.now()).toLocaleString('fa-IR')}</td><td><button class="btn btn--primary btn--sm" data-approve-request="${r.id}">تأیید و ساخت</button> <button class="btn btn--danger btn--sm" data-reject-request="${r.id}">رد</button></td></tr>`).join('') : '';
+      const reqPanel = isOwner ? `<section class="panel"><div class="page-header"><div><h3>درخواست‌های کاربران</h3><p class="muted">درخواست کاربر چهارم به بعد را از اینجا تأیید یا رد کنید.</p></div></div>${mk.table(['نام','نام کاربری','نقش','درخواست‌دهنده','تاریخ','عملیات'],reqRows,'درخواست در انتظار تأیید وجود ندارد.')}</section>` : '';
+      el.innerHTML = (embedded ? '<div class="users-embedded">' : '') + mk.page('کاربران و دسترسی‌ها','ساخت کاربر، اتصال به مشتری و کنترل دقیق دسترسی‌ها',action)
+        + mk.table(['نام','نام کاربری','مشتری مرتبط','نقش','وضعیت','دسترسی','عملیات'], rows, 'هنوز کاربری ثبت نشده است.') + reqPanel + (embedded ? '</div>' : '');
+      el.querySelector('#add')?.addEventListener('click', () => this.openUserForm(el, null));
+      el.querySelector('#request-add')?.addEventListener('click', () => this.openRequestForm(el));
+      el.querySelectorAll('[data-approve-request]').forEach(b=>b.onclick=async()=>{ const r=await db.userRequests.get(Number(b.dataset.approveRequest)); if(r) this.approveRequest(el,r); });
+      el.querySelectorAll('[data-reject-request]').forEach(b=>b.onclick=async()=>{ const r=await db.userRequests.get(Number(b.dataset.rejectRequest)); if(r){ await db.userRequests.update(r.id,{status:'rejected',reviewedAt:new Date().toISOString(),reviewedBy:AUTH.currentUser()?.username||'alireza'}); await db.logActivity({entityType:'userRequest',entityId:r.id,action:'reject'}); ui.toast('درخواست رد شد.','success'); await this.renderUsers(el,embedded); }});
       el.querySelectorAll('[data-edit]').forEach(b => b.onclick = async () => {
         try { const u = await db.users.get(Number(b.dataset.edit)); if (u) this.openUserForm(el, u); else ui.toast('کاربر پیدا نشد.','error'); }
         catch (err) { console.error(err); ui.toast('اطلاعات کاربر قابل دریافت نیست.','error'); }
@@ -107,7 +115,8 @@ const usersModule = {
         if (!name || !username) throw new Error('نام و نام کاربری الزامی است.');
         const all = await db.users.getAll();
         const freeLimit = Number((await db.settings.get('freeUserLimit'))?.value || 3);
-        if (!existing && all.filter(u => !u.builtin).length >= freeLimit && !AUTH.hasPermission('users')) throw new Error('برای افزودن کاربر بیشتر، با سازنده برنامه تماس بگیرید.');
+        const isOwner = !!(AUTH.currentUser()?.developer || AUTH.currentUser()?.username?.toLowerCase() === 'alireza');
+        if (!existing && all.filter(u => !u.builtin).length >= freeLimit && !isOwner) throw new Error('از گزینه «درخواست کاربر جدید» استفاده کنید تا سازنده آن را تأیید کند.');
         const duplicate = all.find(u => String(u.username || '').trim().toLowerCase() === username.toLowerCase() && Number(u.id) !== Number(existing?.id));
         if (duplicate) throw new Error('این نام کاربری قبلاً استفاده شده است.');
 
@@ -135,6 +144,23 @@ const usersModule = {
         button.disabled = false;
       }
     });
+  },
+
+  async openRequestForm(el) {
+    const wrapper=document.createElement('div');
+    wrapper.innerHTML=`<form id="request-form" class="form-grid" autocomplete="off">
+      <label>نام کامل<input name="name" required></label>
+      <label>نام کاربری پیشنهادی<input name="username" required autocomplete="off"></label>
+      <label>نقش<select name="role"><option value="consultant">مشاور</option><option value="manager">مدیر دفتر</option><option value="limited">کاربر محدود</option></select></label>
+      <label>توضیحات درخواست<input name="reason" placeholder="مثلاً اضافه شدن مشاور جدید"></label>
+      <div class="full-width"><button class="btn btn--primary" type="submit">ثبت درخواست</button></div>
+    </form>`;
+    const modal=ui.openModal({title:'درخواست کاربر جدید',bodyEl:wrapper});
+    wrapper.querySelector('form').onsubmit=async e=>{e.preventDefault(); const fd=new FormData(e.currentTarget); const username=String(fd.get('username')||'').trim(); const all=await db.users.getAll(); const pending=await db.userRequests.getAll(); if(all.some(u=>String(u.username).toLowerCase()===username.toLowerCase())||pending.some(r=>r.status==='pending'&&String(r.username).toLowerCase()===username.toLowerCase())){ui.toast('این نام کاربری قبلاً استفاده شده یا در انتظار تأیید است.','error');return;} const actor=AUTH.currentUser(); await db.userRequests.add({name:String(fd.get('name')).trim(),username,role:String(fd.get('role')),roleLabel:{consultant:'مشاور',manager:'مدیر دفتر',limited:'کاربر محدود'}[fd.get('role')]||'کاربر',reason:String(fd.get('reason')||'').trim(),status:'pending',requestedAt:new Date().toISOString(),requestedBy:actor?.username||null,requestedByName:actor?.name||actor?.username||'سیستم'}); await db.logActivity({entityType:'userRequest',action:'create'}); modal.close(); ui.toast('درخواست برای سازنده ارسال شد.','success'); await this.renderUsers(el,true);};
+  },
+
+  async approveRequest(el, request) {
+    const wrapper=document.createElement('div'); wrapper.innerHTML=`<form id="approve-form" class="form-grid"><label>نام کاربری<input value="${mk.esc(request.username)}" disabled></label><label>رمز اولیه<input name="password" type="password" required autocomplete="new-password"></label><label>وضعیت<select name="status"><option value="active">فعال</option><option value="inactive">غیرفعال</option></select></label><div class="full-width"><button class="btn btn--primary" type="submit">تأیید و ساخت حساب</button></div></form>`; const modal=ui.openModal({title:'تأیید درخواست کاربر',bodyEl:wrapper}); wrapper.querySelector('form').onsubmit=async e=>{e.preventDefault(); const fd=new FormData(e.currentTarget); const all=await db.users.getAll(); if(all.some(u=>String(u.username).toLowerCase()===request.username.toLowerCase())){ui.toast('این نام کاربری قبلاً ساخته شده است.','error');return;} const user=await db.users.add({name:request.name,username:request.username,passwordHash:await AUTH.sha256(String(fd.get('password'))),role:request.role,status:String(fd.get('status')),permissions:ROLE_DEFAULTS[request.role]||ROLE_DEFAULTS.limited,builtin:false,approvedBy:AUTH.currentUser()?.username||'alireza',approvedAt:new Date().toISOString(),requestId:request.id}); await db.userRequests.update(request.id,{status:'approved',reviewedAt:new Date().toISOString(),reviewedBy:AUTH.currentUser()?.username||'alireza',createdUserId:user.id}); await db.logActivity({entityType:'userRequest',entityId:request.id,action:'approve',newValue:user.username}); modal.close(); ui.toast('حساب کاربر ساخته و فعال شد.','success'); await this.renderUsers(el,true);};
   }
 };
 window.usersModule = usersModule;

@@ -6,8 +6,10 @@
 const AUTH = (() => {
   const SESSION_KEY = 'melkyar_auth_session';
   const LOCK_PREFIX = 'melkyar_active_user_';
-  const ADMIN_USERNAME = 'Ali';
-  const ADMIN_PASSWORD_HASH = 'a20a2b7bb0842d5cf8a0c06c626421fd51ec103925c1819a51271f2779afa730';
+  const ADMIN_USERNAME = 'alireza';
+  const ADMIN_PASSWORD_HASH = '6495da527bb644b403ca922424bd8976d85699d392f975c7d84cff45db3fd96e';
+  const LEGACY_ADMIN_USERNAME = 'Ali';
+  const LEGACY_ADMIN_PASSWORD_HASH = 'a20a2b7bb0842d5cf8a0c06c626421fd51ec103925c1819a51271f2779afa730';
 
   async function sha256(text) {
     const data = new TextEncoder().encode(text);
@@ -44,31 +46,18 @@ const AUTH = (() => {
   async function ensureBuiltInAdmin() {
     try {
       const existing = await db.users.getAll();
-      const ali = existing.find(u => String(u.username).toLowerCase() === 'ali');
-      if (!ali) {
-        await db.users.add({
-          name: 'مدیر کل',
-          username: ADMIN_USERNAME,
-          passwordHash: ADMIN_PASSWORD_HASH,
-          role: 'admin',
-          status: 'active',
-          permissions: ['all'],
-          builtin: true
-        });
-      } else if (ali.status !== 'active' || ali.role !== 'admin' || ali.passwordHash !== ADMIN_PASSWORD_HASH) {
-        await db.users.update(ali.id, {
-          name: ali.name || 'مدیر کل',
-          username: ADMIN_USERNAME,
-          passwordHash: ADMIN_PASSWORD_HASH,
-          role: 'admin',
-          status: 'active',
-          permissions: ['all'],
-          builtin: true
-        });
+      let owner = existing.find(u => String(u.username || '').toLowerCase() === ADMIN_USERNAME);
+      if (!owner) {
+        owner = await db.users.add({ name: 'علیرضا بدر', username: ADMIN_USERNAME, passwordHash: ADMIN_PASSWORD_HASH, role: 'admin', status: 'active', permissions: ['all'], builtin: true, developer: true });
+      } else if (owner.status !== 'active' || owner.role !== 'admin' || owner.passwordHash !== ADMIN_PASSWORD_HASH || !owner.developer) {
+        await db.users.update(owner.id, { name: 'علیرضا بدر', username: ADMIN_USERNAME, passwordHash: ADMIN_PASSWORD_HASH, role: 'admin', status: 'active', permissions: ['all'], builtin: true, developer: true });
       }
-    } catch (e) {
-      console.error('ensureBuiltInAdmin', e);
-    }
+      // Preserve an older built-in administrator if it already exists, but do not create a second account.
+      const legacy = existing.find(u => String(u.username || '').toLowerCase() === LEGACY_ADMIN_USERNAME.toLowerCase());
+      if (legacy && legacy.username !== ADMIN_USERNAME) {
+        await db.users.update(legacy.id, { builtin: true, developer: true });
+      }
+    } catch (e) { console.error('ensureBuiltInAdmin', e); }
   }
 
   async function verify(username, password) {
@@ -77,11 +66,9 @@ const AUTH = (() => {
     if (!u || !p) return { ok:false, message:'نام کاربری و رمز عبور را وارد کنید.' };
 
     const hash = await sha256(p);
-    if (u.toLowerCase() === ADMIN_USERNAME.toLowerCase() && hash === ADMIN_PASSWORD_HASH) {
+    if ((u.toLowerCase() === ADMIN_USERNAME.toLowerCase() && hash === ADMIN_PASSWORD_HASH) || (u.toLowerCase() === LEGACY_ADMIN_USERNAME.toLowerCase() && hash === LEGACY_ADMIN_PASSWORD_HASH)) {
       const users = await db.users.getAll();
-      const admin = users.find(x => String(x.username).toLowerCase() === 'ali') || {
-        id:'builtin-admin', name:'مدیر کل', username:ADMIN_USERNAME, role:'admin', permissions:['all']
-      };
+      const admin = users.find(x => String(x.username || '').toLowerCase() === u.toLowerCase()) || { id:'builtin-admin', name:'علیرضا بدر', username:ADMIN_USERNAME, role:'admin', permissions:['all'], builtin:true, developer:true };
       setSession(admin);
       return { ok:true, user:admin };
     }

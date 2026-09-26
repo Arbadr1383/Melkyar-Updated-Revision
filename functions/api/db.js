@@ -1,6 +1,6 @@
 const STORES = new Set([
   'properties','customers','activities','settings','owners','visits','followups','deals','commissions',
-  'transactions','accounts','loans','builders','users','tasks','notifications','messages'
+  'transactions','accounts','loans','builders','users','tasks','notifications','messages','userRequests'
 ]);
 
 function json(data, status = 200) {
